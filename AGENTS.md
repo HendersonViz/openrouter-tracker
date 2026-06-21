@@ -8,8 +8,8 @@
 |-------|---------|----------------|
 | Entry point | `run.py` | Instantiates indicator, installs Ctrl-C handler, starts GTK main loop |
 | Indicator UI | `openrouter_tracker/indicator.py` | AppIndicator3 tray icon, menu, hover/fetch display, raw-data window |
-| API Client | `openrouter_tracker/api.py` | `GET /api/v1/auth/key` credit fetch, env-based key management |
-| Config | `openrouter_tracker/config.py` | Env-driven defaults (`OPENROUTER_API_KEY`, `DEFAULT_MODEL`, `REFRESH_INTERVAL`) |
+| API Client | `openrouter_tracker/api.py` | `GET /api/v1/key` key/credit fetch, `GET /api/v1/credits` account credits, `GET /api/v1/activity` per-model daily usage, env-based key management |
+| Config | `openrouter_tracker/config.py` | Env-driven defaults (`OPENROUTER_API_KEY`, `DEFAULT_MODEL`, `REFRESH_INTERVAL`, `USAGE_GRAPH_DAYS`) |
 
 ### Data Flow
 ```
@@ -47,7 +47,7 @@ run.py
 
 ## Roadmap
 
-- [ ] Model-specific usage query (OpenRouter `/api/v1/generation` or per-model breakdown if API exposes it)
+- [x] Model-specific usage query — inline 7-day per-model barchart in the dropdown (via `/api/v1/activity`; requires a Management key)
 - [ ] Config file (`~/.config/openrouter-tracker/config.json`) so model/interval can be set via UI menu
 - [ ] Click-to-copy current credit balance to clipboard
 - [ ] Auto-start `.desktop` entry for GNOME startup
@@ -57,6 +57,8 @@ run.py
 
 - **OpenRouter Key Auth endpoint**: `GET https://openrouter.ai/api/v1/auth/key`
   - Returns: `{ data: { total_credits, total_usage, limit, ... } }`
+- **OpenRouter Activity endpoint**: `GET https://openrouter.ai/api/v1/activity`
+  - Returns: `{ data: [ { date, model, usage, requests, prompt_tokens, ... } ] }` (last 30 completed UTC days; Management key required)
 - **Docs**: https://openrouter.ai/docs
 
 ---

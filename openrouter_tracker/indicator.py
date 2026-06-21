@@ -18,12 +18,13 @@ except (ValueError, ImportError):
     from gi.repository import AppIndicator3  # type: ignore[attr-defined]
 from gi.repository import Gtk, GLib  # type: ignore[attr-defined]
 
-from openrouter_tracker.api import fetch_usage
+from openrouter_tracker.api import fetch_activity, fetch_usage
 from openrouter_tracker.config import (
     DEFAULT_MODEL,
     OPENROUTER_BASE_URL,
     PROJECT_ROOT,
     REFRESH_INTERVAL,
+    USAGE_GRAPH_DAYS,
 )
 
 
@@ -64,6 +65,18 @@ class OpenRouterIndicator:
         self.spent_item = Gtk.MenuItem(label="API key usage: --")
         self.spent_item.set_sensitive(False)
         self.menu.append(self.spent_item)
+
+        self.sep_graph = Gtk.SeparatorMenuItem()
+        self.menu.append(self.sep_graph)
+
+        self.graph_header_item = Gtk.MenuItem(label="Usage (last 7 days)")
+        self.graph_header_item.set_sensitive(False)
+        self.menu.append(self.graph_header_item)
+
+        self._graph_items: list[Gtk.MenuItem] = []
+        self._graph_placeholder = Gtk.MenuItem(label="Usage graph: loading...")
+        self._graph_placeholder.set_sensitive(False)
+        self.menu.append(self._graph_placeholder)
 
         self.model_item = Gtk.MenuItem(label=f"Model: {DEFAULT_MODEL}")
         self.model_item.set_sensitive(False)
@@ -151,9 +164,10 @@ class OpenRouterIndicator:
         while not self._stop.is_set():
             GLib.idle_add(self._set_refresh_state, True)
             data = fetch_usage()
+            activity = fetch_activity()
             self._latest_raw = data
             self._latest_updated_at = time.time() if data is not None else None
-            GLib.idle_add(self._update_ui, data)
+            GLib.idle_add(self._update_ui, data, activity)
             GLib.idle_add(self._set_refresh_state, False)
 
             while not self._stop.is_set():
@@ -176,12 +190,14 @@ class OpenRouterIndicator:
         self.updated_item.set_label(f"Updated: {age_seconds}s ago")
         return True
 
-    def _update_ui(self, data: dict | None) -> bool:
+    def _update_ui(self, data: dict | None, activity: list[dict] | None = None) -> bool:
         if data is None:
-            self.balance_item.set_label("Balance: error")
-            self.account_balance_item.set_label("Account balance: error")
-            self.key_balance_item.set_label("API key remaining: error")
-            self.spent_item.set_label("API key usage: error")
+            self._force_label("No key")
+            self.balance_item.set_label("Balance: no API key")
+            self.account_balance_item.set_label("Account balance: no API key")
+            self.key_balance_item.set_label("API key remaining: no API key")
+            self.spent_item.set_label("API key usage: no API key")
+            self._render_usage_graph(activity)
             self.updated_item.set_label("Updated: fetch failed")
             return False
 
@@ -204,7 +220,7 @@ class OpenRouterIndicator:
             self._format_currency(effective_balance) if effective_balance is not None else "--"
         )
 
-        self.indicator.set_label(indicator_label, "OpenRouter Balance")
+        self._force_label(indicator_label)
         self.balance_item.set_label(
             f"Balance: {self._format_optional_currency(effective_balance)}"
         )
@@ -215,8 +231,112 @@ class OpenRouterIndicator:
             f"API key remaining: {self._format_optional_currency(key_balance)}"
         )
         self.spent_item.set_label(f"API key usage: {self._format_currency(key_usage)}")
+        self._render_usage_graph(activity)
         self._tick_updated_age()
         return False
+
+    def _force_label(self, label: str) -> None:
+        """Re-apply the indicator label/status, defeating the panel's
+        'label unchanged -> skip' cache that lets the top-bar dollar label
+        disappear and never come back."""
+        self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
+        self.indicator.set_label("", "")
+        GLib.idle_add(lambda: (self.indicator.set_label(label, "OpenRouter Balance"), False)[1])
+
+    _BLOCKS = " ▁▂▃▄▅▆▇█"  # index 0 (zero) -> space, 1..8 -> rising bars
+    _MODEL_COL = 22
+
+    def _graph_insert_pos(self) -> int:
+        """Position in the menu where new graph rows should be inserted
+        (immediately after the graph header)."""
+        children = self.menu.get_children()
+        try:
+            return children.index(self.graph_header_item) + 1
+        except ValueError:
+            return len(children)
+
+    def _render_usage_graph(self, activity: list[dict] | None) -> None:
+        """Rebuild the inline barchart menu items (last N days, per model)."""
+        for item in self._graph_items:
+            self.menu.remove(item)
+        self._graph_items = []
+
+        def add_item(label: str) -> None:
+            item = Gtk.MenuItem(label=label)
+            item.set_sensitive(False)
+            self.menu.insert(item, self._graph_insert_pos())
+            item.show()
+            self._graph_items.append(item)
+
+        self.graph_header_item.set_label(f"Usage (last {USAGE_GRAPH_DAYS} days)")
+
+        if not activity:
+            self._graph_placeholder.set_label(
+                "Usage graph: unavailable (needs management key)"
+            )
+            if self._graph_placeholder.get_parent() is None:
+                self.menu.insert(self._graph_placeholder, self._graph_insert_pos())
+                self._graph_placeholder.show()
+            return
+
+        if self._graph_placeholder.get_parent() is not None:
+            self.menu.remove(self._graph_placeholder)
+
+        import datetime as _dt
+
+        per_model: dict[str, dict[str, float]] = {}
+        all_dates: set[str] = set()
+        for row in activity:
+            date = row.get("date")
+            model = row.get("model") or "unknown"
+            usage = self._as_amount(row.get("usage"))
+            if not date:
+                continue
+            all_dates.add(date)
+            per_model.setdefault(model, {})
+            per_model[model][date] = per_model[model].get(date, 0.0) + usage
+
+        dates = sorted(all_dates)[-USAGE_GRAPH_DAYS:]
+        if not dates:
+            add_item("Usage graph: no data in range")
+            return
+
+        max_val = max(
+            (per_model[m].get(d, 0.0) for m in per_model for d in dates),
+            default=0.0,
+        )
+
+        def bar_for(day_values: dict[str, float]) -> str:
+            chars = []
+            for d in dates:
+                v = day_values.get(d, 0.0)
+                if v <= 0 or max_val <= 0:
+                    chars.append(self._BLOCKS[0])
+                    continue
+                level = int(round((v / max_val) * (len(self._BLOCKS) - 2))) + 1
+                level = max(1, min(level, len(self._BLOCKS) - 1))
+                chars.append(self._BLOCKS[level])
+            return "".join(chars)
+
+        model_totals = sorted(
+            ((m, sum(dv.values())) for m, dv in per_model.items()),
+            key=lambda kv: kv[1],
+            reverse=True,
+        )
+
+        for model, total in model_totals:
+            name = (
+                model
+                if len(model) <= self._MODEL_COL
+                else model[: self._MODEL_COL - 1] + "…"
+            )
+            add_item(f"{name:<{self._MODEL_COL}} {bar_for(per_model[model])} ${total:.2f}")
+
+        weekday_initials = "".join(
+            _dt.datetime.strptime(d, "%Y-%m-%d").strftime("%a")[0] for d in dates
+        )
+        grand_total = sum(t for _, t in model_totals)
+        add_item(f"{'':<{self._MODEL_COL}} {weekday_initials} Total: ${grand_total:.2f}")
 
     def _request_refresh(self, _item=None) -> None:
         if self._stop.is_set():

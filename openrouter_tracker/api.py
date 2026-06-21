@@ -20,14 +20,14 @@ def _get_key() -> str:
 
 
 def _fetch_json(path: str, *, optional: bool = False) -> dict[str, Any] | None:
-    req = urllib.request.Request(
-        f"{OPENROUTER_BASE_URL}{path}",
-        headers={
-            "Authorization": f"Bearer {_get_key()}",
-            "Content-Type": "application/json",
-        },
-    )
     try:
+        req = urllib.request.Request(
+            f"{OPENROUTER_BASE_URL}{path}",
+            headers={
+                "Authorization": f"Bearer {_get_key()}",
+                "Content-Type": "application/json",
+            },
+        )
         with urllib.request.urlopen(req, timeout=15) as resp:
             return json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
@@ -50,3 +50,20 @@ def fetch_usage() -> dict[str, Any] | None:
         "key": key_data,
         "credits": credits_data,
     }
+
+
+def fetch_activity() -> list[dict[str, Any]] | None:
+    """Fetch per-model, per-day activity rows for the last 30 completed UTC days.
+
+    Requires a Management key (HTTP 403 for inference-only keys). Each row
+    contains ``date`` (YYYY-MM-DD), ``model``, ``usage`` (cost in USD),
+    ``requests``, and token counts. Returns ``None`` if the request failed,
+    or an empty list if the key lacks access but the call succeeded.
+    """
+    data = _fetch_json("/api/v1/activity", optional=True)
+    if data is None:
+        return None
+    rows = data.get("data") if isinstance(data, dict) else data
+    if not isinstance(rows, list):
+        return []
+    return rows

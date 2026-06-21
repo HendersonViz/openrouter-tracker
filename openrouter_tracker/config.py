@@ -47,3 +47,4 @@ for env_file in ENV_FILES:
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai")
 DEFAULT_MODEL = os.getenv("OPENROUTER_DEFAULT_MODEL", "openai/gpt-4o")
 REFRESH_INTERVAL = int(os.getenv("OPENROUTER_REFRESH_INTERVAL", "300"))  # seconds
+USAGE_GRAPH_DAYS = max(int(os.getenv("OPENROUTER_USAGE_GRAPH_DAYS", "7")), 1)
