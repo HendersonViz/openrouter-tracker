@@ -27,6 +27,8 @@ from openrouter_tracker.config import (
     USAGE_GRAPH_DAYS,
 )
 
+AUTOSTART_FILE = Path.home() / ".config" / "autostart" / "openrouter-tracker.desktop"
+
 
 class OpenRouterIndicator:
     """Simple top-bar credit indicator."""
@@ -97,13 +99,10 @@ class OpenRouterIndicator:
         self.dashboard_item.connect("activate", self._open_dashboard)
         self.menu.append(self.dashboard_item)
 
-        self.autostart_item = Gtk.MenuItem(label="Install startup launcher")
-        self.autostart_item.connect("activate", self._install_autostart)
+        self.autostart_item = Gtk.CheckMenuItem(label="Launch at login")
+        self.autostart_item.set_active(self._autostart_is_enabled())
+        self.autostart_item.connect("toggled", self._toggle_autostart)
         self.menu.append(self.autostart_item)
-
-        self.disable_autostart_item = Gtk.MenuItem(label="Disable startup launcher")
-        self.disable_autostart_item.connect("activate", self._disable_autostart)
-        self.menu.append(self.disable_autostart_item)
 
         self.raw_item = Gtk.MenuItem(label="View raw response (logs)")
         self.raw_item.connect("activate", self._show_raw)
@@ -366,7 +365,31 @@ class OpenRouterIndicator:
     def _open_dashboard(self, _item) -> None:
         webbrowser.open(f"{OPENROUTER_BASE_URL}/settings/credits")
 
-    def _install_autostart(self, _item) -> None:
+    @staticmethod
+    def _autostart_is_enabled() -> bool:
+        if not AUTOSTART_FILE.is_file():
+            return False
+        try:
+            lines = set(AUTOSTART_FILE.read_text(encoding="utf-8").splitlines())
+        except OSError:
+            return False
+        lines = {line.strip() for line in lines}
+        return "X-GNOME-Autostart-enabled=false" not in lines and "Hidden=true" not in lines
+
+    def _toggle_autostart(self, item) -> None:
+        if getattr(self, "_updating_autostart_item", False):
+            return
+        if item.get_active():
+            self._install_autostart()
+        else:
+            self._disable_autostart()
+
+    def _set_autostart_item_active(self, active: bool) -> None:
+        self._updating_autostart_item = True
+        self.autostart_item.set_active(active)
+        self._updating_autostart_item = False
+
+    def _install_autostart(self) -> None:
         try:
             subprocess.run(
                 [sys.executable, str(PROJECT_ROOT / "install_autostart.py")],
@@ -375,21 +398,24 @@ class OpenRouterIndicator:
                 text=True,
             )
         except subprocess.CalledProcessError as exc:
+            self._set_autostart_item_active(False)
             self.updated_item.set_label("Updated: startup install failed")
             self._latest_raw = {"autostart_error": exc.stderr.strip() or exc.stdout.strip()}
             return
 
+        self._set_autostart_item_active(True)
         self.updated_item.set_label("Updated: startup enabled")
 
-    def _disable_autostart(self, _item) -> None:
-        autostart_path = Path.home() / ".config" / "autostart" / "openrouter-tracker.desktop"
+    def _disable_autostart(self) -> None:
         try:
-            autostart_path.unlink(missing_ok=True)
+            AUTOSTART_FILE.unlink(missing_ok=True)
         except OSError as exc:
+            self._set_autostart_item_active(True)
             self.updated_item.set_label("Updated: startup disable failed")
             self._latest_raw = {"autostart_error": str(exc)}
             return
 
+        self._set_autostart_item_active(False)
         self.updated_item.set_label("Updated: startup disabled")
 
     def run(self) -> None:

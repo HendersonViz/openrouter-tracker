@@ -18,8 +18,8 @@ A minimal Ubuntu/GNOME panel indicator that polls your [OpenRouter](https://open
 
 ```bash
 sudo apt update
-sudo apt install libgtk-3-dev libgirepository1.0-dev libcairo2-dev \
-    gir1.2-ayatanaappindicator3-0.1
+sudo apt install gcc pkg-config python3-dev libgtk-3-dev \
+    libgirepository-2.0-dev libcairo2-dev gir1.2-ayatanaappindicator3-0.1
 ```
 
 > If `gir1.2-ayatanaappindicator3-0.1` is not found, try `gir1.2-appindicator3-0.1`.
@@ -75,7 +75,7 @@ The app will then start on login and appear in the top-right indicator area. If 
 
 If you want it to poll more or less often after install, set `OPENROUTER_REFRESH_INTERVAL` in `~/.config/openrouter-tracker/config.env`.
 
-You can also manage startup directly from the tray menu with `Install startup launcher` and `Disable startup launcher`.
+You can also manage startup from the tray menu with the `Launch at login` switch. Its checked state reflects whether the autostart launcher is enabled.
 
 ## Project Layout
 
